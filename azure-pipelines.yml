@@ -43,7 +43,8 @@ stages:
                   -backend-config="container_name=tfstate" \
                   -backend-config="key=kubenews.tfstate"
 
-                terraform apply -auto-approve
+                terraform apply -auto-approve \
+                  -var="postgres_admin_password=gui24848536"
 
                 # Configure kubectl
                 az aks get-credentials \
