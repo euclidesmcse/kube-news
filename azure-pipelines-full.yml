@@ -1,0 +1,205 @@
+trigger:
+  - main
+  - develop
+
+pr:
+  - main
+  - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerRegistryServiceConnection: 'kubenews-acr'
+  imageRepository: 'kubenews'
+  containerRegistry: 'kubenewsacr.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+  imageName: '$(containerRegistry)/$(imageRepository):$(tag)'
+  imageNameLatest: '$(containerRegistry)/$(imageRepository):latest'
+  terraformVersion: '1.5.0'
+
+stages:
+  # Stage 0: Provision Infrastructure
+  - stage: ProvisionInfra
+    displayName: Provision Infrastructure with Terraform
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    jobs:
+      - job: TerraformJob
+        displayName: 'Terraform Plan & Apply'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: AzureCLI@2
+            displayName: 'Azure Login'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az account show
+                az group list --output table
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              backendServiceArm: 'azure-subscription-connection'
+              backendAzureRmResourceGroupName: 'rg-terraform-state'
+              backendAzureRmStorageAccountName: 'kubenewstfstate'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'kubenews.tfstate'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              commandOptions: '-out=tfplan'
+              environmentServiceNameAzureRM: 'azure-subscription-connection'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Apply'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              commandOptions: 'tfplan'
+              environmentServiceNameAzureRM: 'azure-subscription-connection'
+
+          - task: AzureCLI@2
+            displayName: 'Configure kubectl'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group rg-kubenews \
+                  --name aks-kubenews-dev \
+                  --overwrite-existing
+                az aks get-credentials \
+                  --resource-group rg-kubenews \
+                  --name aks-kubenews-prod \
+                  --overwrite-existing
+                kubectl config get-contexts
+
+  # Stage 1: Build and Test
+  - stage: Build
+    displayName: Build and Test
+    dependsOn: ProvisionInfra
+    condition: succeeded()
+    jobs:
+      - job: BuildJob
+        displayName: Build Docker Image
+        steps:
+          - checkout: self
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Install Node.js'
+
+          - script: |
+              cd src
+              npm ci
+              npm run build --if-present
+            displayName: 'Install and Build'
+            continueOnError: false
+
+          - task: Docker@2
+            displayName: 'Build Docker Image'
+            inputs:
+              command: 'build'
+              Dockerfile: '$(dockerfilePath)'
+              tags: |
+                $(imageName)
+                $(imageNameLatest)
+
+          - task: Docker@2
+            displayName: 'Push Image to ACR'
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+            inputs:
+              command: 'push'
+              Dockerfile: '$(dockerfilePath)'
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              tags: |
+                $(imageName)
+                $(imageNameLatest)
+
+  # Stage 2: Security Scanning
+  - stage: Security
+    displayName: Security Scan
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: TriviaScan
+        displayName: 'Scan Image with Trivy'
+        steps:
+          - task: AquasecTrivy@1
+            displayName: 'Run Trivy Scan'
+            condition: false
+            inputs:
+              image: '$(imageName)'
+              scanType: 'image'
+              severities: 'CRITICAL,HIGH'
+              exitCode: '1'
+
+  # Stage 3: Deploy to Dev
+  - stage: DeployDev
+    displayName: Deploy to Dev
+    dependsOn: Security
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    jobs:
+      - deployment: DeploymentDev
+        displayName: 'Deploy to Dev Cluster'
+        environment: 'dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: KubernetesManifest@0
+                  displayName: 'Deploy to Kubernetes'
+                  inputs:
+                    action: 'deploy'
+                    kubernetesServiceConnection: 'aks-dev-connection'
+                    namespace: 'default'
+                    manifests: |
+                      $(Pipeline.Workspace)/s/manifests/deployment.yml
+                      $(Pipeline.Workspace)/s/manifests/service.yml
+
+  # Stage 4: Deploy to Production
+  - stage: DeployProd
+    displayName: Deploy to Production
+    dependsOn: Security
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeploymentProd
+        displayName: 'Deploy to Prod Cluster'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: KubernetesManifest@0
+                  displayName: 'Deploy to Kubernetes'
+                  inputs:
+                    action: 'deploy'
+                    kubernetesServiceConnection: 'aks-prod-connection'
+                    namespace: 'kubenews'
+                    manifests: |
+                      $(Pipeline.Workspace)/s/manifests/deployment.yml
+                      $(Pipeline.Workspace)/s/manifests/service.yml

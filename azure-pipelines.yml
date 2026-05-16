@@ -1,0 +1,131 @@
+trigger:
+  - main
+  - develop
+
+pr:
+  - main
+  - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerRegistryServiceConnection: 'YourACRServiceConnection'
+  imageRepository: 'kubenews'
+  containerRegistry: 'youracr.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+  imageName: '$(containerRegistry)/$(imageRepository):$(tag)'
+  imageNameLatest: '$(containerRegistry)/$(imageRepository):latest'
+
+stages:
+  # Stage 1: Build and Test
+  - stage: Build
+    displayName: Build and Test
+    jobs:
+      - job: BuildJob
+        displayName: Build Docker Image
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Use .NET'
+            inputs:
+              packageType: 'runtime'
+              version: '6.x'
+            condition: false
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Install Node.js'
+
+          - script: |
+              cd src
+              npm ci
+              npm run build --if-present
+            displayName: 'Install and Build'
+            continueOnError: false
+
+          - task: Docker@2
+            displayName: 'Build Docker Image'
+            inputs:
+              command: 'build'
+              Dockerfile: '$(dockerfilePath)'
+              tags: |
+                $(imageName)
+                $(imageNameLatest)
+              arguments: '--build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') --build-arg VCS_REF=$(Build.SourceVersion)'
+
+          - task: Docker@2
+            displayName: 'Push Image to ACR'
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+            inputs:
+              command: 'push'
+              Dockerfile: '$(dockerfilePath)'
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              tags: |
+                $(imageName)
+                $(imageNameLatest)'
+
+  # Stage 2: Security Scanning
+  - stage: Security
+    displayName: Security Scan
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: TriviaScan
+        displayName: 'Scan Image with Trivy'
+        steps:
+          - task: AquasecTrivy@1
+            displayName: 'Run Trivy Scan'
+            condition: false
+            inputs:
+              image: '$(imageName)'
+              scanType: 'image'
+              severities: 'CRITICAL,HIGH'
+              exitCode: '1'
+
+  # Stage 3: Deploy to Dev
+  - stage: DeployDev
+    displayName: Deploy to Dev
+    dependsOn: Security
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    jobs:
+      - deployment: DeploymentDev
+        displayName: 'Deploy to Dev Cluster'
+        environment: 'dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: KubernetesManifest@0
+                  displayName: 'Deploy to Kubernetes'
+                  inputs:
+                    action: 'deploy'
+                    kubernetesServiceConnection: 'dev-aks-connection'
+                    namespace: 'default'
+                    manifests: |
+                      $(Pipeline.Workspace)/manifests/deployment.yml
+                      $(Pipeline.Workspace)/manifests/service.yml
+
+  # Stage 4: Deploy to Production
+  - stage: DeployProd
+    displayName: Deploy to Production
+    dependsOn: Security
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeploymentProd
+        displayName: 'Deploy to Prod Cluster'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: KubernetesManifest@0
+                  displayName: 'Deploy to Kubernetes'
+                  inputs:
+                    action: 'deploy'
+                    kubernetesServiceConnection: 'prod-aks-connection'
+                    namespace: 'kubenews'
+                    manifests: |
+                      $(Pipeline.Workspace)/manifests/deployment.yml
+                      $(Pipeline.Workspace)/manifests/service.yml

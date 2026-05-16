@@ -1,0 +1,9 @@
+# Copie este arquivo para terraform.tfvars e ajuste os valores
+
+project_name       = "kubenews"
+location           = "eastus"
+kubernetes_version = "1.28"
+aks_dev_node_count = 1
+aks_prod_node_count = 3
+aks_vm_size        = "Standard_B2s"
+environment        = "production"

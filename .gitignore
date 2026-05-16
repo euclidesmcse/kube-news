@@ -104,3 +104,31 @@ node_modules/
 # .tern-port
 
 *.Identifier
+
+# Docker
+.docker/
+.dockerignore
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+.cache/
+
+# Local scripts and configs
+scripts/local/
+*.local.yml
