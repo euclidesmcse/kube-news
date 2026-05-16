@@ -121,8 +121,23 @@ stages:
                   --name aks-kubenews-prod \
                   --overwrite-existing
 
-                # Deploy
+                # Get Terraform outputs
+                cd ../terraform
+                POSTGRES_FQDN=$(terraform output -raw postgres_fqdn)
+                cd ..
+
+                # Create Kubernetes secret with PostgreSQL credentials
                 kubectl create namespace kubenews --dry-run=client -o yaml | kubectl apply -f -
+                kubectl create secret generic kubenews-secrets \
+                  --from-literal=db-host=$POSTGRES_FQDN \
+                  --from-literal=db-port=5432 \
+                  --from-literal=db-database=kubedevnews \
+                  --from-literal=db-username=kubeadmin \
+                  --from-literal=db-password=gui24848536 \
+                  --from-literal=db-ssl-require=true \
+                  -n kubenews --dry-run=client -o yaml | kubectl apply -f -
+
+                # Deploy
                 kubectl apply -f manifests/deployment.yml -n kubenews
                 kubectl apply -f manifests/service.yml -n kubenews
                 kubectl rollout status deployment/kubenews -n kubenews
