@@ -19,9 +19,85 @@ variables:
   imageNameLatest: '$(containerRegistry)/$(imageRepository):latest'
 
 stages:
+  # Stage 0: Provision Infrastructure with Terraform
+  - stage: ProvisionInfra
+    displayName: Provision Infrastructure with Terraform
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    jobs:
+      - job: TerraformJob
+        displayName: 'Terraform Init, Plan & Apply'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: AzureCLI@2
+            displayName: 'Install Terraform'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+                sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+                sudo apt-get update && sudo apt-get install -y terraform
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              inlineScript: |
+                terraform init \
+                  -backend-config="resource_group_name=rg-terraform-state" \
+                  -backend-config="storage_account_name=kubenewstfstate" \
+                  -backend-config="container_name=tfstate" \
+                  -backend-config="key=kubenews.tfstate"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              inlineScript: |
+                terraform plan -out=tfplan
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Apply'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+              inlineScript: |
+                terraform apply -auto-approve tfplan
+                terraform output -json > $(Build.ArtifactStagingDirectory)/terraform-outputs.json
+
+          - task: AzureCLI@2
+            displayName: 'Configure kubectl'
+            inputs:
+              azureSubscription: 'azure-subscription-connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group rg-kubenews \
+                  --name aks-kubenews-dev \
+                  --overwrite-existing
+                az aks get-credentials \
+                  --resource-group rg-kubenews \
+                  --name aks-kubenews-prod \
+                  --overwrite-existing
+                kubectl config get-contexts
+
   # Stage 1: Build
   - stage: Build
     displayName: Build Docker Image
+    dependsOn: ProvisionInfra
+    condition: succeeded()
     jobs:
       - job: BuildJob
         displayName: Build and Push
