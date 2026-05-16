@@ -39,3 +39,40 @@ variable "environment" {
   type        = string
   default     = "production"
 }
+
+variable "postgres_admin_user" {
+  description = "PostgreSQL admin username"
+  type        = string
+  default     = "kubeadmin"
+  sensitive   = true
+}
+
+variable "postgres_admin_password" {
+  description = "PostgreSQL admin password"
+  type        = string
+  sensitive   = true
+}
+
+variable "postgres_sku" {
+  description = "PostgreSQL SKU"
+  type        = string
+  default     = "B_Gen5_2"
+}
+
+variable "postgres_version" {
+  description = "PostgreSQL version"
+  type        = string
+  default     = "11"
+}
+
+variable "postgres_storage_mb" {
+  description = "Storage in MB"
+  type        = number
+  default     = 51200
+}
+
+variable "postgres_database_name" {
+  description = "Database name"
+  type        = string
+  default     = "kubedevnews"
+}
