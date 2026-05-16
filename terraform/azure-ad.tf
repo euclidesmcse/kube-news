@@ -11,7 +11,7 @@ resource "azuread_service_principal" "aks" {
 
 resource "azuread_service_principal_password" "aks" {
   service_principal_id = azuread_service_principal.aks.id
-  end_date_relative   = "8760h" # 1 ano
+  end_date             = timeadd(timestamp(), "8760h")
 }
 
 # Role Assignment - Contributor no Resource Group para o Service Principal

@@ -55,7 +55,7 @@ resource "azurerm_kubernetes_cluster" "aks_dev" {
     node_count          = var.aks_dev_node_count
     vm_size             = var.aks_vm_size
     type                = "VirtualMachineScaleSets"
-    availability_zones  = ["1", "2"]
+    zones               = ["1", "2"]
 
     tags = local.common_tags
   }
@@ -93,7 +93,7 @@ resource "azurerm_kubernetes_cluster" "aks_prod" {
     node_count          = var.aks_prod_node_count
     vm_size             = var.aks_vm_size
     type                = "VirtualMachineScaleSets"
-    availability_zones  = ["1", "2", "3"]
+    zones               = ["1", "2", "3"]
     max_pods            = 110
 
     tags = local.common_tags
